@@ -1,4 +1,4 @@
-#!/bion/ksh
+#!/bin/ksh
 ##############################################################################
 ##  PROGRAM:	update_haproxy
 ##
@@ -28,6 +28,11 @@ PROGRAM_VAH=$(echo ${PROGRAM_DIR}|awk -F/ '{print $2}')
 PROGRAM_PARAMETERS=$*
 PROGRAM_VERSION="0.99"
 LOG_DIR="/var/log/update_haproxy/"
+LOG_FILE="${LOG_DIR}update_haproxy.log"
+REGISTRY_FILE="/etc/update_haproxy/registry.cfg"
+AWS_BINARY="/usr/bin/aws"
+AWS_OUTPUT_TYPE="text"
+AWS_REGION_CODE="us-east-1"
 #
 ##############################################################################
 Print_Error ()
@@ -61,14 +66,15 @@ Print_File ()
 Print_Program_Info ()
 {
     Print_Info "################################################################"
-    Print_Info "####  Monitor Aurora Clustner and Change Proxy as Required  ####"
+    Print_Info "####  Monitor Aurora Cluster and change HA-Proxy as required ###"
     Print_Info "################################################################"
     Print_Info "Program Info"
-    Print_Info " Name		: ${PROGRAM_NAME}"
-    Print_Info " Dir		: ${PROGRAM_DIR}"
-    Print_Info " Version	: ${PROGRAM_VERSION}"
-    Print_Info " Parameters	: ${PROGRAM_PARAMETERS}"
-    Print_Info " Registry File  : ${PROGRAM_REGISTRY}"
+    Print_Info " Name			: ${PROGRAM_NAME}"
+    Print_Info " Dir			: ${PROGRAM_DIR}"
+    Print_Info " Version		: ${PROGRAM_VERSION}"
+    Print_Info " Parameters		: ${PROGRAM_PARAMETERS}"
+    Print_Info " Registry File  	: ${REGISTRY_FILE}"
+    Print_Info " Parameters passed	: ${NUM_PARAMETERS}"
   
     if [[ -a "${PROGRAM_REGISTRY}" ]]
     then
@@ -79,14 +85,15 @@ Print_Program_Info ()
     fi
 
     Print_Info
-    Print_Info "  Log File              : ${LOG_FILE}"
+    Print_Info "  Log File		: ${LOG_FILE}"
 }
 
 Initialization()
 {
    USER=$(whoami)
-
-   if [[ "${USER}" != "haproxy" ]]
+# removing / negating if clause for testing
+#   if [[ "${USER}" != "haproxy" ]]
+   if [[ "${USER}" = "haproxy" ]]
    then
 	Print_Error "Must be run\\logged in as \"haproxy\"."
 	exit 1
@@ -122,6 +129,27 @@ Print_Program_Info
 ###############################################################################
 Usage()
 {
-     echo "Usage: ${PROGRAM_NAME} <-a Aurora Cluster Name>  <-c Aurora cluster Name > [
+     echo "Usage: ${PROGRAM_NAME} <-a Aurora Cluster Name>  <-c Aurora cluster Name >"
+     echo "       and other options"
+}
+##############################################################################
+# Procedure	: find_cluster_members
+# Purpose 	: Find all DB instances of a given Cluster
+###############################################################################
+find_cluster_members()
+{
+   Print_Info "  Cluster Name		: ${CLUSTER_NAME}"
+   CLUSTER_MEMBERS=$(${AWS_BINARY} rds describe-db-clusters --db-cluster-identifier ${CLUSTER_NAME} --region ${AWS_REGION_CODE} \
+                      --output ${AWS_OUTPUT_TYPE}   --query 'DBClusters[].DBClusterMembers[].DBInstanceIdentifier[]')
+   CLUSTER_NODE_COUNT=$( echo ${CLUSTER_MEMBERS}| wc -w)
 
+   Print_Info "  Cluster nodes found	: ${CLUSTER_NODE_COUNT}"
+   Print_Info "  Cluster members	: ${CLUSTER_MEMBERS}"
+}
+##############################################################################
+# Main Routine
+##############################################################################
+NUM_PARAMETERS=$(echo "$*" | wc -w)
+Initialization $*
+find_cluster_members
 
