@@ -18,7 +18,7 @@
 ##  09-SEP-20 SGK
 ##	v0.99 and intial version
 ##############################################################################
-#
+
 PROGRAM=$0
 PROGRAM_NAME=$(basename $0)
 PROGRAM_DIR=$(which $0)
@@ -30,10 +30,11 @@ PROGRAM_VERSION="0.99"
 LOG_DIR="/var/log/update_haproxy/"
 LOG_FILE="${LOG_DIR}update_haproxy.log"
 REGISTRY_FILE="/etc/update_haproxy/registry.cfg"
+TEMPLATE_FILE="/etc/update_haproxy/template.cfg"
 AWS_BINARY="/usr/bin/aws"
 AWS_OUTPUT_TYPE="text"
 AWS_REGION_CODE="us-east-1"
-#
+
 ##############################################################################
 Print_Error ()
 {
@@ -99,17 +100,17 @@ Initialization()
 	exit 1
    fi
 
-   while getopts a:c:l:r:sh OPT
+   while getopts a:m:p:H:lh OPT
    do
 	case $OPT in
 		a)  CLUSTER_NAME=$OPTARG ;;
-		c)  show_current_config
-		    exit 0 ;;
+                m)  RUN_MONITOR_MODE=TRUE ;;
+		p)  PROXY_PORT=$OPTARG ;;
+                H)  HEALTH_CHECK_PORT=$OPTARG ;;
 		l)  list_registry_contents 
 		    exit 0 ;;
 		r)  CLUSTER_TO_REMOVE=$OPTARG ;;
-		s)  show_proxy_configuration
-		    exit 0 ;;
+
 		h)  Usage
 		    exit 0 ;;
 		\?) Usage
@@ -119,6 +120,8 @@ done
 
 CFG_DIR=${CFG_DIR:-/etc/monitor_proxy}
 LOG_DIR=${LOG_DIR:-/var/log/update_haproxy}
+
+
 
 Print_Program_Info
 
@@ -136,20 +139,120 @@ Usage()
 # Procedure	: find_cluster_members
 # Purpose 	: Find all DB instances of a given Cluster
 ###############################################################################
-find_cluster_members()
+find_cluster_information()
 {
-   Print_Info "  Cluster Name		: ${CLUSTER_NAME}"
+   
    CLUSTER_MEMBERS=$(${AWS_BINARY} rds describe-db-clusters --db-cluster-identifier ${CLUSTER_NAME} --region ${AWS_REGION_CODE} \
                       --output ${AWS_OUTPUT_TYPE}   --query 'DBClusters[].DBClusterMembers[].DBInstanceIdentifier[]')
-   CLUSTER_NODE_COUNT=$( echo ${CLUSTER_MEMBERS}| wc -w)
 
-   Print_Info "  Cluster nodes found	: ${CLUSTER_NODE_COUNT}"
-   Print_Info "  Cluster members	: ${CLUSTER_MEMBERS}"
+   ENGINE_TYPE=$(${AWS_BINARY} rds describe-db-clusters --db-cluster-identifier ${CLUSTER_NAME} --region ${AWS_REGION_CODE} \
+                      --output ${AWS_OUTPUT_TYPE}   --query 'DBClusters[].Engine[]')
+
+   ENGINE_VERSION=$(${AWS_BINARY} rds describe-db-clusters --db-cluster-identifier ${CLUSTER_NAME} --region ${AWS_REGION_CODE} \
+                      --output ${AWS_OUTPUT_TYPE}   --query 'DBClusters[].EngineVersion[]')
+
+   CLUSTER_NODE_COUNT=$( echo ${CLUSTER_MEMBERS} | wc -w)
+  
+   Print_Info ""
+   Print_Info "  Cluster name     : ${CLUSTER_NAME}"
+   Print_Info "  Nodes found      : ${CLUSTER_NODE_COUNT}"
+   Print_Info "  Cluster members  : ${CLUSTER_MEMBERS}"
+   Print_Info "  Engine           : ${ENGINE_TYPE}"
+   Print_Info "  Engine version   : ${ENGINE_VERSION}"
+   Print_Info ""
+}
+
+##############################################################################
+# Procedure : add_to_registry
+# Purpose   : Adding all entries to Registry file 
+#################################################################
+add_to_registry()
+{
+      
+      CONFIG_PRESENT=$(grep -q $CLUSTER_NAME $REGISTRY_FILE && echo $? ) 
+      if [[ $CONFIG_PRESENT -eq 0 ]]
+      then 
+          Print_Error "   Instance already Present in Registry File, skipping"
+          Print_Error "   Exiting"
+          exit 1
+      elif [[ "${ENGINE_TYPE}" != 'aurora-postgresl' || "${ENGINE_TYPE}" != 'aurora'  ]]
+      then 
+          Print_Error "   Instance provided is not an Aurora type , skipping"
+          Print_Error "   Exiting"
+          exit 1
+      elif [[ "${CLUSTER_MEMBERS}" -le 2 ]]
+      then 
+          Print_Error "   Cluster does not have any read replicas "
+          Print_Error "   Exiting"
+          exit 1 
+      elif  [[ "$(grep -q ${PROXY_PORT} ${REGISTRY_FILE} ; echo $? )"  -eq 0 ]]; 
+      then 
+          Print_Error "   Proxy Port in use , Please check and try again"
+          Print_Error "   Exiting"
+          exit 1 
+      elif  [[ "$( grep -q ${HEALTH_CHECK_PORT} ${REGISTRY_FILE} ; echo $? )" -eq 0  ]]
+      then
+          Print_Error "   Health Check Port in Use. Please check and try again "
+          Print_Error "   Exiting"
+          exit 1 
+      else
+          Print_Info "   Adding Entry to Registry File "
+          echo "${CLUSTER_NAME};${ENGINE_TYPE};${ENGINE_VERSION};${PROXY_PORT};${HEALTH_CHECK_PORT}" >> ${REGISTRY_FILE}
+      fi
+}
+##############################################################################
+# Procedure : generate_configuration
+# Purpose   : Generate HA Prroxy Configuration for server 
+##############################################################################
+generate_configurartion()
+{
+    cp ${TEMPLATE_FILE} /tmp/${CLUSTER_NAME}.cfg.latest
+
+    echo "/tmp/${CLUSTER_NAME}.cfg.latest"
+
+sleep 10
+
+    sed "s/_clustername_/${CLUSTER_NAME}/g; \
+         s/_proxy_port_number/${PROXY_PORT}/g; \
+         s/_healtcheckport_/${HEALTH_CHECK_PORT}/g;" "/tmp/${ClUSTER_NAME}.cfg.latest"
+
+       for node in  ${CLUSTER_MEMBERS[@]};
+          do
+            MEMBER_ENDPOINT=$(${AWS_BINARY} rds describe-db-instances --db-instance-identifier ${node} \
+                               --output text --query 'DBInstances[].Endpoint[].Address[]' --region ${AWS_REGION_CODE})
+
+            MEMBER_PORT=$(${AWS_BINARY} rds describe-db-instances --db-instance-identifier ${node} \
+                          --output text --query 'DBInstances[].Endpoint[].Port[]' --region ${AWS_REGION_CODE})
+
+            echo "server $node ${MEMBER_ENDPOINT}:${MEMBER_PORT} check port ${HEALTH_CHECK_PORT}" \
+                 >> "/tmp/${ClUSTER_NAME}.cfg.latest"
+          done
+}
+
+##############################################################################
+# Procedure : list_registry_contents
+# Purpose   : List Databases on the Registry
+##############################################################################
+list_registry_contents()
+{
+    if [[ -a "${REGISTRY_FILE}" ]]
+    then
+        egrep -v "^#" ${REGISTRY_FILE}|while read LINE
+        do
+            CLUSTER_NAME=$(echo ${LINE}|awk -F ';' '{print $1}')
+            =$(echo ${LINE}|awk -F':|=' '{print $2}')
+            if [[ "${PARAM_KEY}" != "" ]]
+            then
+                eval ${PARAM_KEY}=\${${PARAM_KEY}:-${PARAM_VALUE}}
+            fi
+        done
+    fi   
 }
 ##############################################################################
 # Main Routine
 ##############################################################################
-NUM_PARAMETERS=$(echo "$*" | wc -w)
+NUM_PARAMETERS="$#" 
 Initialization $*
-find_cluster_members
-
+find_cluster_information
+add_to_registry
+generate_configuration
