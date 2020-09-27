@@ -100,25 +100,39 @@ Initialization()
 	exit 1
    fi
 
-   while getopts a:m:p:H:lh OPT
+   while getopts a:m:p:H:r:lh OPT
    do
 	case $OPT in
-		a)  CLUSTER_NAME=$OPTARG ;;
-                m)  RUN_MONITOR_MODE=TRUE ;;
+		a)  CLUSTER_NAME=$OPTARG 
+                    typeset -r OPERATION="ADD" ;;
+                m)  RUN_MONITOR_MODE=TRUE 
+                    typeset -r OPERATION="MONITOR" ;;
 		p)  PROXY_PORT=$OPTARG ;;
                 H)  HEALTH_CHECK_PORT=$OPTARG ;;
 		l)  list_registry_contents 
 		    exit 0 ;;
-		r)  CLUSTER_TO_REMOVE=$OPTARG ;;
+		r)  CLUSTER_TO_REMOVE=$OPTARG 
+                    typeset -r OPERATION="REMOVE" ;;
 
 		h)  Usage
 		    exit 0 ;;
 		\?) Usage
 		    exit 1 ;;
 	esac
-done
+   done
 
-CFG_DIR=${CFG_DIR:-/etc/monitor_proxy}
+   if [[ "${OPERATION}" = "ADD" ]]  && [[ $PROXY_PORT:? || $HEALTH_CHECK_PORT:? ]]
+   then
+       echo " "
+       echo "Invoked with insufficient arguements"
+       echo "Please try again with all mandatory parameters. "
+       echo " "
+       Usage
+       echo ""
+       exit 1
+   fi
+
+CFG_DIR=${CFG_DIR:-/etc/update_haproxy}
 LOG_DIR=${LOG_DIR:-/var/log/update_haproxy}
 
 
@@ -132,8 +146,15 @@ Print_Program_Info
 ###############################################################################
 Usage()
 {
-     echo "Usage: ${PROGRAM_NAME} <-a Aurora Cluster Name>  <-c Aurora cluster Name >"
-     echo "       and other options"
+     echo "Usage: ${PROGRAM_NAME} -a <cluster-name> -p <haproxy port to set > -H <haproxy external command service check port >"
+     echo "                       -l -r <cluster-name> -h "
+     echo "Options "
+     echo "        -a   takes a clustername as arguement and Adds a new cluster to the registry file to be monitored for changes periodically."
+     echo "             -p and -H are mandatory parameters as they determine the port HA proxy will listen on for the cluster and any custom  "
+     echo "             healtcheck scripts.                                                                                                   "
+     echo "        -l   List information about all clusters currently monitored "
+     echo "        -r   Removes  a cluster from the configuration from monitoring "
+     echo "        -h   Prints this usage informantion                            "
 }
 ##############################################################################
 # Procedure	: find_cluster_members
@@ -168,19 +189,23 @@ find_cluster_information()
 #################################################################
 add_to_registry()
 {
+set -x
       
-      CONFIG_PRESENT=$(grep -q $CLUSTER_NAME $REGISTRY_FILE && echo $? ) 
+      CONFIG_PRESENT=$(grep -q $CLUSTER_NAME $REGISTRY_FILE ; echo $? ) 
+      echo "${CONFIG_PRESENT}"
+      sleep 5
       if [[ $CONFIG_PRESENT -eq 0 ]]
       then 
           Print_Error "   Instance already Present in Registry File, skipping"
           Print_Error "   Exiting"
           exit 1
-      elif [[ "${ENGINE_TYPE}" != 'aurora-postgresl' || "${ENGINE_TYPE}" != 'aurora'  ]]
+      elif [[ "${ENGINE_TYPE}" != 'aurora-postgresql' ]] || [[ "${ENGINE_TYPE}" != 'aurora-mysql'  ]]
       then 
+          echo "${ENGINE_TYPE}"
           Print_Error "   Instance provided is not an Aurora type , skipping"
           Print_Error "   Exiting"
           exit 1
-      elif [[ "${CLUSTER_MEMBERS}" -le 2 ]]
+      elif [[ "${CLUSTER_NODE_COUNT}" -le 2 ]]
       then 
           Print_Error "   Cluster does not have any read replicas "
           Print_Error "   Exiting"
@@ -206,11 +231,12 @@ add_to_registry()
 ##############################################################################
 generate_configurartion()
 {
+    set -x
     cp ${TEMPLATE_FILE} /tmp/${CLUSTER_NAME}.cfg.latest
 
     echo "/tmp/${CLUSTER_NAME}.cfg.latest"
 
-sleep 10
+    sleep 10
 
     sed "s/_clustername_/${CLUSTER_NAME}/g; \
          s/_proxy_port_number/${PROXY_PORT}/g; \
