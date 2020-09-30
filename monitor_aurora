@@ -121,7 +121,8 @@ Initialization()
 	esac
    done
 
-   if [[ "${OPERATION}" = "ADD" ]]  && [[ $PROXY_PORT:? || $HEALTH_CHECK_PORT:? ]]
+
+   if [[ "${OPERATION}" = "ADD" ]]  && [[ ( ! $PROXY_PORT ) || (! $HEALTH_CHECK_PORT ) ]]
    then
        echo " "
        echo "Invoked with insufficient arguements"
@@ -146,9 +147,9 @@ Print_Program_Info
 ###############################################################################
 Usage()
 {
-     echo "Usage: ${PROGRAM_NAME} -a <cluster-name> -p <haproxy port to set > -H <haproxy external command service check port >"
+     echo "Usage:${PROGRAM_NAME} -a <cluster-name> -p <haproxy port to set > -H <haproxy external command service check port >"
      echo "                       -l -r <cluster-name> -h "
-     echo "Options "
+     echo "Options:"
      echo "        -a   takes a clustername as arguement and Adds a new cluster to the registry file to be monitored for changes periodically."
      echo "             -p and -H are mandatory parameters as they determine the port HA proxy will listen on for the cluster and any custom  "
      echo "             healtcheck scripts.                                                                                                   "
@@ -189,23 +190,21 @@ find_cluster_information()
 #################################################################
 add_to_registry()
 {
-set -x
       
       CONFIG_PRESENT=$(grep -q $CLUSTER_NAME $REGISTRY_FILE ; echo $? ) 
-      echo "${CONFIG_PRESENT}"
-      sleep 5
+
       if [[ $CONFIG_PRESENT -eq 0 ]]
       then 
           Print_Error "   Instance already Present in Registry File, skipping"
           Print_Error "   Exiting"
           exit 1
-      elif [[ "${ENGINE_TYPE}" != 'aurora-postgresql' ]] || [[ "${ENGINE_TYPE}" != 'aurora-mysql'  ]]
+      elif [[ "$(echo ${ENGINE_TYPE} | grep -q aurora ; echo $? )" -ne 0 ]]
       then 
           echo "${ENGINE_TYPE}"
           Print_Error "   Instance provided is not an Aurora type , skipping"
           Print_Error "   Exiting"
           exit 1
-      elif [[ "${CLUSTER_NODE_COUNT}" -le 2 ]]
+      elif [[ "${CLUSTER_NODE_COUNT}" -lt 2 ]]
       then 
           Print_Error "   Cluster does not have any read replicas "
           Print_Error "   Exiting"
@@ -231,12 +230,8 @@ set -x
 ##############################################################################
 generate_configurartion()
 {
-    set -x
-    cp ${TEMPLATE_FILE} /tmp/${CLUSTER_NAME}.cfg.latest
-
-    echo "/tmp/${CLUSTER_NAME}.cfg.latest"
-
-    sleep 10
+    touch "/tmp/${CLUSTER_NAME}.cfg.latest"
+    cat  ${TEMPLATE_FILE} > /tmp/${CLUSTER_NAME}.cfg.latest
 
     sed "s/_clustername_/${CLUSTER_NAME}/g; \
          s/_proxy_port_number/${PROXY_PORT}/g; \
@@ -261,16 +256,26 @@ generate_configurartion()
 ##############################################################################
 list_registry_contents()
 {
+    let COUNT=1
+
     if [[ -a "${REGISTRY_FILE}" ]]
     then
+        Print_Info
+        Print_Info "Found the following cluster/clusters"
         egrep -v "^#" ${REGISTRY_FILE}|while read LINE
         do
+            Print_Info "${COUNT}."
             CLUSTER_NAME=$(echo ${LINE}|awk -F ';' '{print $1}')
-            =$(echo ${LINE}|awk -F':|=' '{print $2}')
-            if [[ "${PARAM_KEY}" != "" ]]
-            then
-                eval ${PARAM_KEY}=\${${PARAM_KEY}:-${PARAM_VALUE}}
-            fi
+            CLUSTER_TYPE=$(echo ${LINE}|awk -F ';' '{print $2}')
+            ENGINE_VERSION=$(echo ${LINE}|awk -F ';' '{print $3}')
+            PROXY_PORT_NUMBER=$(echo ${LINE}|awk -F ';' '{print $4}')
+            HEALTH_PORT_NUMBER=$(echo ${LINE}|awk -F ';' '{print $5}')
+            Print_Info "	${CLUSTER_NAME}"
+            Print_Info "	${CLUSTER_TYPE}"
+            Print_Info "	${ENGINE_VERSION}"
+            Print_Info "	${PROXY_PORT_NUMBER}"
+            Print_Info "	${HEALTH_PORT_NUMBER}"
+            ((COUNT=COUNT+1))
         done
     fi   
 }
