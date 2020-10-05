@@ -29,6 +29,9 @@ LOG_FILE="${LOG_DIR}update_haproxy.log"
 
 REGISTRY_FILE="/etc/update_haproxy/registry.cfg"
 TEMPLATE_FILE="/etc/update_haproxy/template.cfg"
+REGISTRY_DIR="/etc/update_haproxy/"
+TEMPLATE_DIR="/etc/update_haproxy/staging"
+RELOAD="FALSE"
 
 
 AWS_BINARY="/usr/bin/aws"
@@ -136,7 +139,6 @@ Initialization()
 
 CFG_DIR=${CFG_DIR:-/etc/update_haproxy}
 LOG_DIR=${LOG_DIR:-/var/log/update_haproxy}
-
 
 
 Print_Program_Info
@@ -247,6 +249,14 @@ del_from_registry()
               Print_Error " Failed deletion from Registry File"
               Print_Error " Please inspect file and remove manually"
           fi
+          Print_Info "Removing configuration items for cluster from HA-Proxy"
+          rm -f "/etc/haproxy/${CLUSTER_NAME}.cfg" ;
+          if [[ $? -eq 0 ]]
+          then 
+             RELOAD="TRUE"
+          else 
+             Print_Error " Deleting HA-Proxy config items failed , check permissions and delete manually"
+          fi 
       else
           Print_Info "  Cluster not present in Registry"
           Print_Info "  Exiting " 
@@ -258,24 +268,70 @@ del_from_registry()
 ##############################################################################
 generate_configuration()
 {
-    touch "/tmp/${CLUSTER_NAME}.cfg.latest"
-    cat  ${TEMPLATE_FILE} > /tmp/${CLUSTER_NAME}.cfg.latest
+    if [[ -d "${REGISTRY_DIR}" ]]
+    then 
+        mkdir -p "${REGISTRY_DIR}/staging"
+    fi 
 
-    sed -i "s/_clustername_/${CLUSTER_NAME}/g; \
-         s/_proxy_port_number/${PROXY_PORT}/g; \
-         s/_healtcheckport_/${HEALTH_CHECK_PORT}/g;" "/tmp/${ClUSTER_NAME}.cfg.latest"
+    if [[ ! -f  "/etc/haproxy/global.cfg" ]]
+    then
+        Print_Info "  HA-Proxy global definitions and skeleton service nor present, Creating "
+        cp -f "${TEMPLATE_DIR}/global.cfg" "/etc/haproxy/"
+    fi
 
-       for node in  ${CLUSTER_MEMBERS[@]};
-          do
-            MEMBER_ENDPOINT=$(${AWS_BINARY} rds describe-db-instances --db-instance-identifier ${node} \
+    if [[ -r "${REGISTRY_FILE}" ]]
+    then
+        egrep -v "^#" ${REGISTRY_FILE}|while read LINE
+        do
+            CLUSTER_NAME=$(echo ${LINE}|awk -F ';' '{print $1}')
+            CLUSTER_TYPE=$(echo ${LINE}|awk -F ';' '{print $2}')
+            ENGINE_VERSION=$(echo ${LINE}|awk -F ';' '{print $3}')
+            PROXY_PORT_NUMBER=$(echo ${LINE}|awk -F ';' '{print $4}')
+            HEALTH_CHECK_PORT=$(echo ${LINE}|awk -F ';' '{print $5}')
+            CLUSTER_MEMBERS=$(${AWS_BINARY} rds describe-db-clusters --db-cluster-identifier ${CLUSTER_NAME} --region ${AWS_REGION_CODE} \
+                              --output ${AWS_OUTPUT_TYPE}   --query 'DBClusters[].DBClusterMembers[].DBInstanceIdentifier[]')
+
+            STAGING="${REGISTRY_DIR}/staging/${CLUSTER_NAME}.cfg.latest"
+            PRODUCTION_CONFIGURATION="/etc/haproxy/${CLUSTER_NAME}.cfg"
+
+            touch "${STAGING}"
+            cat  "${TEMPLATE_FILE}" > "${STAGING}"
+
+
+            sed  -i "s/_clustername_/${CLUSTER_NAME}/g; \
+                     s/_proxy_port_number/${PROXY_PORT_NUMBER}/g; \
+                     s/_healtcheckport_/${HEALTH_CHECK_PORT}/g;" "${STAGING}"
+
+            for node in  ${CLUSTER_MEMBERS[@]};
+            do
+              MEMBER_ENDPOINT=$(${AWS_BINARY} rds describe-db-instances --db-instance-identifier ${node} \
                                --output text --query 'DBInstances[].Endpoint[].Address[]' --region ${AWS_REGION_CODE})
 
-            MEMBER_PORT=$(${AWS_BINARY} rds describe-db-instances --db-instance-identifier ${node} \
+              MEMBER_PORT=$(${AWS_BINARY} rds describe-db-instances --db-instance-identifier ${node} \
                           --output text --query 'DBInstances[].Endpoint[].Port[]' --region ${AWS_REGION_CODE})
 
-            echo "server $node ${MEMBER_ENDPOINT}:${MEMBER_PORT} check port ${HEALTH_CHECK_PORT}" \
-                 >> "/tmp/${ClUSTER_NAME}.cfg.latest"
-          done
+              echo "server $node ${MEMBER_ENDPOINT}:${MEMBER_PORT} check port ${HEALTH_CHECK_PORT}" \
+                    >> "${STAGING}"
+            done
+
+
+            if [[ ! -r "${PRODUCTION_CONFIGURATION}" ]]
+            then 
+                Print_Info "No existing configuration found for this cluster, creating"
+                cp -f "${STAGING}" "${PRODUCTION_CONFIGURATION}" ; if [[ "$?" != "0" ]]; then Print_Error "Creation Failed , check permissions"; fi ;
+                RELOAD="TRUE"
+            else
+                diff ${PRODUCTION_CONFIGURATION} ${STAGING} ; if [[ "$?" != "0" ]]; then 
+                                                              Print_Info "Change in Configuration for ${CLUSTER_NAME} detected" && \
+                                                              cp -f "${STAGING}" "${PRODUCTION_CONFIGURATION}" && RELOAD="TRUE" ;  fi ;
+            fi
+
+        done
+    
+   else 
+       Print_Error "No Registry file found , quiting"
+       exit 0
+   fi
 }
 
 ##############################################################################
@@ -284,7 +340,15 @@ generate_configuration()
 ##############################################################################
 reload_haproxy()
 {
- echo "Reloading"
+  if [[ "${RELOAD}" == "TRUE" ]]
+  then
+      Print_Info " Changes in Configuration Found , reloading HA-proxy for new configuration items" 
+      Print_Info "Reloading"
+      sudo systemctl reload haproxy-2.0.14.service ; if [[ "$?" != "0" ]]; then Print_Error " Reload Failed, Check sudo privielleges to ha proxy for calling systemctl"; fi
+
+  else 
+      Print_Info "  No Changes found , will check again at next invocation"
+  fi
 }
 ##############################################################################
 # Procedure : list_registry_contents
