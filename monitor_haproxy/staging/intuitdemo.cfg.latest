@@ -1,0 +1,15 @@
+listen  intuitdemoro
+        log /dev/log local0 debug
+        bind *:5432
+        mode tcp
+        timeout client  10800s
+        timeout server  10800s
+        option external-check
+        external-check command /usr/local/sbin/postgreschk
+        balance leastconn
+
+#     <keyword> <server-alias> <endpoint-name>:portnumber check port health_check_port_number       
+#	server intuitdemo-instance-1 intuitdemo-instance-1.chvfd4itmpdg.us-east-1.rds.amazonaws.com:5432 check port 9201 
+
+server application-autoscaling-fa3abf3b-b370-4389-8f9a-8b1d78aa35c6 application-autoscaling-fa3abf3b-b370-4389-8f9a-8b1d78aa35c6.chvfd4itmpdg.us-east-1.rds.amazonaws.com:5432 check port 9001
+server intuitdemo-instance-1 intuitdemo-instance-1.chvfd4itmpdg.us-east-1.rds.amazonaws.com:5432 check port 9001
