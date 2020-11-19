@@ -1,5 +1,5 @@
 # Auto Update Haproxy for Aurora Cluster events
-Shell script to use as Cron job to monitor Aurora cluster and update HAproxy listener/endpoints
+Shell (monitor_aurora) script to use with Cron scheduler to monitor Aurora cluster and update HAproxy listener/endpoints
 Includes functionality to maintain and build configuration for more than 1 cluster 
 
 #Other Files in the Repo
