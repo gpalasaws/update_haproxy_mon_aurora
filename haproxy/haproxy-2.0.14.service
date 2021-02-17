@@ -1,3 +1,5 @@
+# Reference Systemd Unit file for use with HAProxy 
+# values for EXECRELOAD very important and affects behaviour of HAProxy when it is dynamically reconfigured and reloaded for new values to take effect
 [Unit]
 Description=HAProxy 2.0.14
 After=syslog.target network.target
