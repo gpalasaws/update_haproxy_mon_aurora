@@ -1,4 +1,4 @@
-# Auto Update Haproxy for Aurora Cluster events to serve a single dynamic end pint true to the Aurora cluster state 
+# Auto Update HAProxy for Aurora Cluster events to serve a single dynamic end point true to the Aurora cluster state with PgBouncer as sidecar
 
 Contents of the folder 
 Name 	   			Description
